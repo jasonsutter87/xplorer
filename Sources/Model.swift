@@ -214,6 +214,7 @@ final class BrowserModel: ObservableObject {
     @Published var expanded: Set<String> = []
     @Published var sidebarSelection: String?
     @Published var busy = 0
+    @Published var dropTarget: String?   // folder row highlighted while dragging over the list
     @Published var freeSpace = ""
     @Published var roots: [URL] = []
     @Published private(set) var maxSize: Int64 = 0   // biggest item in view, for the size bars
@@ -745,15 +746,29 @@ final class BrowserModel: ObservableObject {
                 group.leave()
             }
         }
-        group.notify(queue: .main) {
-            guard !urls.isEmpty else { return }
-            // Same disk = move, different disk = copy (like Windows). Hold Option to force copy.
-            let destVol = (try? dest.resourceValues(forKeys: [.volumeIdentifierKey]))?.volumeIdentifier as? NSObject
-            let srcVol = (try? urls[0].resourceValues(forKeys: [.volumeIdentifierKey]))?.volumeIdentifier as? NSObject
-            let sameDisk = destVol != nil && destVol == srcVol
-            self.transfer(urls, to: dest, move: sameDisk && !copyOnly)
-        }
+        group.notify(queue: .main) { self.handleDrop(urls, into: dest, copyOnly: copyOnly) }
         return true
+    }
+
+    /// Same disk = move, different disk = copy (like Windows). Hold Option to force copy.
+    func handleDrop(_ urls: [URL], into dest: URL, copyOnly: Bool = NSEvent.modifierFlags.contains(.option)) {
+        // Dropping a folder back onto itself is a no-op, not an error.
+        let urls = urls.filter { $0.isFileURL && $0.standardizedFileURL.path != dest.standardizedFileURL.path }
+        guard !urls.isEmpty else { return }
+        let destVol = (try? dest.resourceValues(forKeys: [.volumeIdentifierKey]))?.volumeIdentifier as? NSObject
+        let srcVol = (try? urls[0].resourceValues(forKeys: [.volumeIdentifierKey]))?.volumeIdentifier as? NSObject
+        let sameDisk = destVol != nil && destVol == srcVol
+        transfer(urls, to: dest, move: sameDisk && !copyOnly)
+    }
+
+    /// Drag payload: a file URL, which Terminal/iTerm turn into an escaped path and Finder/other apps accept as the file.
+    static func dragProvider(for url: URL) -> NSItemProvider {
+        let p = NSItemProvider()
+        p.suggestedName = url.lastPathComponent
+        p.registerDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier, visibility: .all) { done in
+            done(url.dataRepresentation, nil); return nil
+        }
+        return p
     }
 
     // MARK: Table helpers (SwiftUI's Table can't scroll programmatically, so poke the NSTableView)
@@ -768,6 +783,33 @@ final class BrowserModel: ObservableObject {
         return find(root)
     }
 
+    /// Drag & drop onto the file list: on a folder row = into that folder; anywhere else = into the current folder.
+    func installTableDrop() {
+        guard let t = fileTable() else { return }
+        func folder(_ t: NSTableView, _ info: NSDraggingInfo) -> FileItem? {
+            let row = t.row(at: t.convert(info.draggingLocation, from: nil))
+            guard row >= 0, row < displayed.count, displayed[row].isDir else { return nil }
+            return displayed[row]
+        }
+        TableDrop.install(on: t, handler: TableDropHandler(
+            update: { [weak self] t, info in
+                guard let self, !TableDrop.fileURLs(info).isEmpty else { return [] }
+                let target = folder(t, info)?.id
+                if self.dropTarget != target { self.dropTarget = target }
+                return TableDrop.operation(info)
+            },
+            perform: { [weak self] t, info in
+                guard let self else { return false }
+                let urls = TableDrop.fileURLs(info)
+                let dest = folder(t, info)?.url ?? self.current
+                self.dropTarget = nil
+                guard !urls.isEmpty else { return false }
+                self.handleDrop(urls, into: dest)
+                return true
+            },
+            exit: { [weak self] in if self?.dropTarget != nil { self?.dropTarget = nil } }))
+    }
+
     func scrollToSelection() {
         DispatchQueue.main.async {
             guard let t = self.fileTable(),
@@ -779,6 +821,7 @@ final class BrowserModel: ObservableObject {
     func focusTable() {
         DispatchQueue.main.async {
             if let t = self.fileTable() { self.window?.makeFirstResponder(t) }
+            self.installTableDrop()
         }
     }
 

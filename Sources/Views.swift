@@ -411,8 +411,16 @@ struct FileList: View {
                 HStack(spacing: 6) {
                     Image(nsImage: IconCache.shared.icon(item.id))
                     Text(item.name).lineLimit(1)
+                    Spacer(minLength: 0)
                 }
                 .opacity(clip.cutPaths.contains(item.id) || item.isHidden ? 0.5 : 1)
+                .background {
+                    if model.dropTarget == item.id {
+                        RoundedRectangle(cornerRadius: 4).fill(Color.accentColor.opacity(0.25))
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.accentColor, lineWidth: 1.5))
+                            .padding(.horizontal, -4).padding(.vertical, -1)
+                    }
+                }
             }
             .width(min: 160, ideal: 340)
 
@@ -441,7 +449,7 @@ struct FileList: View {
         } rows: {
             ForEach(model.displayed) { item in
                 TableRow(item)
-                    .itemProvider { NSItemProvider(object: item.url as NSURL) }
+                    .itemProvider { BrowserModel.dragProvider(for: item.url) }
             }
         }
         .contextMenu(forSelectionType: String.self) { ids in
@@ -449,7 +457,6 @@ struct FileList: View {
         } primaryAction: { ids in
             model.open(ids)
         }
-        .onDrop(of: [.fileURL], isTargeted: nil) { model.dropFiles($0, into: model.current) }
         .overlay {
             if let err = model.loadError {
                 VStack(spacing: 8) {

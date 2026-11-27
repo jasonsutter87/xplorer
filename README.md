@@ -1,6 +1,6 @@
 # Xplorer
 
-A Windows Explorer–style file manager for macOS (SwiftUI, macOS 13+).
+A Windows Explorer–style file manager for macOS (SwiftUI, macOS 14+).
 
 Build & install: `./build.sh --install` → `~/Applications/Xplorer.app`
 
